@@ -1,0 +1,6 @@
+
+def main(ctx):
+    requests = ctx.vars['requests']
+    r = requests.get('https://bpowers.net')
+    print(r.status_code)
+    return None
