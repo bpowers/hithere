@@ -151,9 +151,9 @@ func (b *Work) makeRequest(c *http.Client) {
 	t := now()
 	finish := t - s
 	b.results <- &result{
-		offset:        s,
-		duration:      finish,
-		err:           err,
+		offset:   s,
+		duration: finish,
+		err:      err,
 	}
 }
 

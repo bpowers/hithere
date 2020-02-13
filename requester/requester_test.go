@@ -28,8 +28,8 @@ import (
 	"time"
 )
 
-type testRequester struct{
-	req *http.Request
+type testRequester struct {
+	req  *http.Request
 	body []byte
 }
 
@@ -62,8 +62,8 @@ func TestN(t *testing.T) {
 	req, _ := http.NewRequest("GET", server.URL, nil)
 	w := &Work{
 		Requester: &testRequester{req, nil},
-		N:       20,
-		C:       2,
+		N:         20,
+		C:         2,
 	}
 	w.Run()
 	if count != 20 {
@@ -83,9 +83,9 @@ func TestQps(t *testing.T) {
 	req, _ := http.NewRequest("GET", server.URL, nil)
 	w := &Work{
 		Requester: &testRequester{req, nil},
-		N:       20,
-		C:       2,
-		QPS:     1,
+		N:         20,
+		C:         2,
+		QPS:       1,
 	}
 	wg.Add(1)
 	time.AfterFunc(time.Second, func() {
@@ -118,8 +118,8 @@ func TestRequest(t *testing.T) {
 	req.SetBasicAuth("username", "password")
 	w := &Work{
 		Requester: &testRequester{req, nil},
-		N:       1,
-		C:       1,
+		N:         1,
+		C:         1,
 	}
 	w.Run()
 	if uri != "/" {
@@ -152,9 +152,9 @@ func TestBody(t *testing.T) {
 
 	req, _ := http.NewRequest("POST", server.URL, bytes.NewBuffer([]byte("Body")))
 	w := &Work{
-		Requester:     &testRequester{req, []byte("Body")},
-		N:           10,
-		C:           1,
+		Requester: &testRequester{req, []byte("Body")},
+		N:         10,
+		C:         1,
 	}
 	w.Run()
 	if count != 10 {

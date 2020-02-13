@@ -1,6 +1,8 @@
 
+def do_one(requests):
+    r = requests.get('https://bpowers.net')
+    print(r)
+
 def main(ctx):
     requests = ctx.vars['requests']
-    r = requests.get('https://bpowers.net')
-    print(r.status_code)
-    return None
+    do_one(requests)

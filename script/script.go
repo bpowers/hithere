@@ -36,7 +36,10 @@ func New(path string) (*Script, error) {
 }
 
 func (s *Script) Do(ctx context.Context, c *http.Client) (nRequests int, err error) {
-	_, err = s.config.Main(ctx)
+
+	_, err = s.config.Main(ctx, skycfg.WithVars(starlark.StringDict{
+		"requests": RequestsModule(c),
+	}))
 	if err != nil {
 		return nRequests, fmt.Errorf("main: %w", err)
 	}
