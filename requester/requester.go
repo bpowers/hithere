@@ -17,11 +17,11 @@ package requester
 
 import (
 	"bytes"
+	"context"
 	"crypto/tls"
 	"io"
 	"io/ioutil"
 	"net/http"
-	"net/http/httptrace"
 	"net/url"
 	"os"
 	"sync"
@@ -47,11 +47,14 @@ type result struct {
 	contentLength int64
 }
 
+type Requester interface {
+	Do(ctx context.Context, c *http.Client) (nRequests int, err error)
+	Clone() Requester
+}
+
 type Work struct {
 	// Request is the request to be made.
-	Request *http.Request
-
-	RequestBody []byte
+	Requester Requester
 
 	// N is the total number of requests to make.
 	N int
@@ -73,9 +76,6 @@ type Work struct {
 
 	// DisableKeepAlives is an option to prevents re-use of TCP connections between different HTTP requests
 	DisableKeepAlives bool
-
-	// DisableRedirects is an option to prevent the following of HTTP redirects
-	DisableRedirects bool
 
 	// Output represents the output type. If "csv" is provided, the
 	// output will be dumped as a csv stream.
@@ -141,59 +141,19 @@ func (b *Work) Finish() {
 }
 
 func (b *Work) makeRequest(c *http.Client) {
+	ctx := context.Background()
+
 	s := now()
-	var size int64
-	var code int
-	var dnsStart, connStart, resStart, reqStart, delayStart time.Duration
-	var dnsDuration, connDuration, resDuration, reqDuration, delayDuration time.Duration
-	req := cloneRequest(b.Request, b.RequestBody)
-	trace := &httptrace.ClientTrace{
-		DNSStart: func(info httptrace.DNSStartInfo) {
-			dnsStart = now()
-		},
-		DNSDone: func(dnsInfo httptrace.DNSDoneInfo) {
-			dnsDuration = now() - dnsStart
-		},
-		GetConn: func(h string) {
-			connStart = now()
-		},
-		GotConn: func(connInfo httptrace.GotConnInfo) {
-			if !connInfo.Reused {
-				connDuration = now() - connStart
-			}
-			reqStart = now()
-		},
-		WroteRequest: func(w httptrace.WroteRequestInfo) {
-			reqDuration = now() - reqStart
-			delayStart = now()
-		},
-		GotFirstResponseByte: func() {
-			delayDuration = now() - delayStart
-			resStart = now()
-		},
-	}
-	req = req.WithContext(httptrace.WithClientTrace(req.Context(), trace))
-	resp, err := c.Do(req)
-	if err == nil {
-		size = resp.ContentLength
-		code = resp.StatusCode
-		io.Copy(ioutil.Discard, resp.Body)
-		resp.Body.Close()
-	}
+
+	nRequests, err := b.Requester.Clone().Do(ctx, c)
+	_ = nRequests
+
 	t := now()
-	resDuration = t - resStart
 	finish := t - s
 	b.results <- &result{
 		offset:        s,
-		statusCode:    code,
 		duration:      finish,
 		err:           err,
-		contentLength: size,
-		connDuration:  connDuration,
-		dnsDuration:   dnsDuration,
-		reqDuration:   reqDuration,
-		resDuration:   resDuration,
-		delayDuration: delayDuration,
 	}
 }
 
@@ -203,11 +163,6 @@ func (b *Work) runWorker(client *http.Client, n int) {
 		throttle = time.Tick(time.Duration(1e6/(b.QPS)) * time.Microsecond)
 	}
 
-	if b.DisableRedirects {
-		client.CheckRedirect = func(req *http.Request, via []*http.Request) error {
-			return http.ErrUseLastResponse
-		}
-	}
 	for i := 0; i < n; i++ {
 		// Check if application is stopped. Do not send into a closed channel.
 		select {
@@ -229,7 +184,6 @@ func (b *Work) runWorkers() {
 	tr := &http.Transport{
 		TLSClientConfig: &tls.Config{
 			InsecureSkipVerify: true,
-			ServerName:         b.Request.Host,
 		},
 		MaxIdleConnsPerHost: min(b.C, maxIdleConn),
 		DisableCompression:  b.DisableCompression,

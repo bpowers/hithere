@@ -18,36 +18,25 @@ package main
 import (
 	"flag"
 	"fmt"
-	"io/ioutil"
 	"math"
-	"net/http"
 	gourl "net/url"
 	"os"
 	"os/signal"
 	"regexp"
 	"runtime"
-	"strings"
 	"time"
 
-	"github.com/rakyll/hey/requester"
+	"github.com/bpowers/hithere/requester"
+	"github.com/bpowers/hithere/script"
 )
 
 const (
 	headerRegexp = `^([\w-]+):\s*(.+)`
 	authRegexp   = `^(.+):([^\s].+)`
-	heyUA        = "hey/0.0.1"
+	heyUA        = "hithere/0.0.1"
 )
 
 var (
-	m           = flag.String("m", "GET", "")
-	headers     = flag.String("h", "", "")
-	body        = flag.String("d", "", "")
-	bodyFile    = flag.String("D", "", "")
-	accept      = flag.String("A", "", "")
-	contentType = flag.String("T", "text/html", "")
-	authHeader  = flag.String("a", "", "")
-	hostHeader  = flag.String("host", "", "")
-
 	output = flag.String("o", "", "")
 
 	c = flag.Int("c", 50, "")
@@ -61,11 +50,10 @@ var (
 
 	disableCompression = flag.Bool("disable-compression", false, "")
 	disableKeepAlives  = flag.Bool("disable-keepalive", false, "")
-	disableRedirects   = flag.Bool("disable-redirects", false, "")
 	proxyAddr          = flag.String("x", "", "")
 )
 
-var usage = `Usage: hey [options...] <url>
+var usage = `Usage: hey [options...] <script>
 
 Options:
   -n  Number of requests to run. Default is 200.
@@ -79,19 +67,12 @@ Options:
       "csv" is the only supported alternative. Dumps the response
       metrics in comma-separated values format.
 
-  -m  HTTP method, one of GET, POST, PUT, DELETE, HEAD, OPTIONS.
-  -H  Custom HTTP header. You can specify as many as needed by repeating the flag.
-      For example, -H "Accept: text/html" -H "Content-Type: application/xml" .
-  -t  Timeout for each request in seconds. Default is 20, use 0 for infinite.
-  -A  HTTP Accept header.
-  -d  HTTP request body.
-  -D  HTTP request body from file. For example, /home/user/file.txt or ./file.txt.
-  -T  Content-type, defaults to "text/html".
-  -a  Basic authentication, username:password.
   -x  HTTP Proxy address as host:port.
   -h2 Enable HTTP/2.
 
   -host	HTTP Host header.
+
+  -script skycfg script to use as a load generator; URL and HTTP options ignored.
 
   -disable-compression  Disable compression.
   -disable-keepalive    Disable keep-alive, prevents re-use of TCP
@@ -135,49 +116,11 @@ func main() {
 		}
 	}
 
-	url := flag.Args()[0]
-	method := strings.ToUpper(*m)
-
-	// set content-type
-	header := make(http.Header)
-	header.Set("Content-Type", *contentType)
-	// set any other additional headers
-	if *headers != "" {
-		usageAndExit("Flag '-h' is deprecated, please use '-H' instead.")
-	}
-	// set any other additional repeatable headers
-	for _, h := range hs {
-		match, err := parseInputWithRegexp(h, headerRegexp)
-		if err != nil {
-			usageAndExit(err.Error())
-		}
-		header.Set(match[1], match[2])
-	}
-
-	if *accept != "" {
-		header.Set("Accept", *accept)
-	}
-
-	// set basic auth if set
-	var username, password string
-	if *authHeader != "" {
-		match, err := parseInputWithRegexp(*authHeader, authRegexp)
-		if err != nil {
-			usageAndExit(err.Error())
-		}
-		username, password = match[1], match[2]
-	}
-
-	var bodyAll []byte
-	if *body != "" {
-		bodyAll = []byte(*body)
-	}
-	if *bodyFile != "" {
-		slurp, err := ioutil.ReadFile(*bodyFile)
-		if err != nil {
-			errAndExit(err.Error())
-		}
-		bodyAll = slurp
+	path := flag.Args()[0]
+	req, err := script.New(path)
+	if err != nil {
+		fmt.Printf("skycfg error: %s\n", err)
+		os.Exit(1)
 	}
 
 	var proxyURL *gourl.URL
@@ -189,39 +132,14 @@ func main() {
 		}
 	}
 
-	req, err := http.NewRequest(method, url, nil)
-	if err != nil {
-		usageAndExit(err.Error())
-	}
-	req.ContentLength = int64(len(bodyAll))
-	if username != "" || password != "" {
-		req.SetBasicAuth(username, password)
-	}
-
-	// set host header if set
-	if *hostHeader != "" {
-		req.Host = *hostHeader
-	}
-
-	ua := req.UserAgent()
-	if ua == "" {
-		ua = heyUA
-	} else {
-		ua += " " + heyUA
-	}
-	header.Set("User-Agent", ua)
-	req.Header = header
-
 	w := &requester.Work{
-		Request:            req,
-		RequestBody:        bodyAll,
+		Requester:          req,
 		N:                  num,
 		C:                  conc,
 		QPS:                q,
 		Timeout:            *t,
 		DisableCompression: *disableCompression,
 		DisableKeepAlives:  *disableKeepAlives,
-		DisableRedirects:   *disableRedirects,
 		H2:                 *h2,
 		ProxyAddr:          proxyURL,
 		Output:             *output,

@@ -16,6 +16,9 @@ package requester
 
 import (
 	"bytes"
+	"context"
+	"fmt"
+	"io"
 	"io/ioutil"
 	"net/http"
 	"net/http/httptest"
@@ -24,6 +27,29 @@ import (
 	"testing"
 	"time"
 )
+
+type testRequester struct{
+	req *http.Request
+	body []byte
+}
+
+func (t *testRequester) Do(ctx context.Context, c *http.Client) (nRequests int, err error) {
+	resp, err := c.Do(t.req)
+	if err != nil {
+		return 1, fmt.Errorf("c.Do: %w", err)
+	}
+
+	io.Copy(ioutil.Discard, resp.Body)
+	resp.Body.Close()
+
+	return 1, nil
+}
+
+func (t *testRequester) Clone() Requester {
+	return &testRequester{
+		req: cloneRequest(t.req, t.body),
+	}
+}
 
 func TestN(t *testing.T) {
 	var count int64
@@ -35,7 +61,7 @@ func TestN(t *testing.T) {
 
 	req, _ := http.NewRequest("GET", server.URL, nil)
 	w := &Work{
-		Request: req,
+		Requester: &testRequester{req, nil},
 		N:       20,
 		C:       2,
 	}
@@ -56,7 +82,7 @@ func TestQps(t *testing.T) {
 
 	req, _ := http.NewRequest("GET", server.URL, nil)
 	w := &Work{
-		Request: req,
+		Requester: &testRequester{req, nil},
 		N:       20,
 		C:       2,
 		QPS:     1,
@@ -91,7 +117,7 @@ func TestRequest(t *testing.T) {
 	req.Header = header
 	req.SetBasicAuth("username", "password")
 	w := &Work{
-		Request: req,
+		Requester: &testRequester{req, nil},
 		N:       1,
 		C:       1,
 	}
@@ -108,6 +134,9 @@ func TestRequest(t *testing.T) {
 	if auth != "Basic dXNlcm5hbWU6cGFzc3dvcmQ=" {
 		t.Errorf("Basic authorization is not properly set")
 	}
+	if method != "GET" {
+		t.Errorf("expected GET method")
+	}
 }
 
 func TestBody(t *testing.T) {
@@ -123,8 +152,7 @@ func TestBody(t *testing.T) {
 
 	req, _ := http.NewRequest("POST", server.URL, bytes.NewBuffer([]byte("Body")))
 	w := &Work{
-		Request:     req,
-		RequestBody: []byte("Body"),
+		Requester:     &testRequester{req, []byte("Body")},
 		N:           10,
 		C:           1,
 	}
