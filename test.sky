@@ -1,8 +1,0 @@
-
-def do_one(requests):
-    r = requests.get('https://bpowers.net')
-    print(r)
-
-def main(ctx):
-    requests = ctx.vars['requests']
-    do_one(requests)

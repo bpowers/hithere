@@ -39,8 +39,8 @@ const (
 var (
 	output = flag.String("o", "", "")
 
-	c = flag.Int("c", 50, "")
-	n = flag.Int("n", 200, "")
+	c = flag.Int("c", 2, "")
+	n = flag.Int("n", 2, "")
 	q = flag.Float64("q", 0, "")
 	t = flag.Int("t", 20, "")
 	z = flag.Duration("z", 0, "")
@@ -72,7 +72,7 @@ Options:
 
   -host	HTTP Host header.
 
-  -script skycfg script to use as a load generator; URL and HTTP options ignored.
+  -script starlark script to use as a load generator; URL and HTTP options ignored.
 
   -disable-compression  Disable compression.
   -disable-keepalive    Disable keep-alive, prevents re-use of TCP
@@ -119,7 +119,7 @@ func main() {
 	path := flag.Args()[0]
 	req, err := script.New(path)
 	if err != nil {
-		fmt.Printf("skycfg error: %s\n", err)
+		fmt.Printf("starlark error: %s\n", err)
 		os.Exit(1)
 	}
 
