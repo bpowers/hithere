@@ -8,13 +8,16 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
+	"github.com/bpowers/hithere/requester"
 	"io"
 	"io/ioutil"
 	"log"
 	"math"
 	"net/http"
+	"net/http/httptrace"
 	"sort"
 	"strings"
+	"time"
 
 	"github.com/stripe/stripe-go/form"
 	"go.starlark.net/starlark"
@@ -224,6 +227,14 @@ func (r *requestsModule) fnRequestsGet(t *starlark.Thread, fn *starlark.Builtin,
 		return starlark.None, fmt.Errorf("expected non-nil requests_client")
 	}
 
+	var reporter chan<- *requester.Result
+	if reporter, ok = t.Local("reporter").(chan<- *requester.Result); !ok {
+		return starlark.None, fmt.Errorf("expected reporter")
+	}
+	if reporter == nil {
+		return starlark.None, fmt.Errorf("expected non-nil reporter")
+	}
+
 	var urlString starlark.Value
 	if err := starlark.UnpackArgs(fn.Name(), args, kwargs, "url", &urlString); err != nil {
 		return nil, err
@@ -239,7 +250,7 @@ func (r *requestsModule) fnRequestsGet(t *starlark.Thread, fn *starlark.Builtin,
 		return starlark.None, fmt.Errorf("http.NewRequest: %w", err)
 	}
 
-	goresp, err := c.Do(req)
+	goresp, err := instrument(c, req, reporter)
 	if err != nil {
 		return starlark.None, fmt.Errorf("r.c.Do: %w", err)
 	}
@@ -255,6 +266,14 @@ func (r *requestsModule) fnRequestsPost(t *starlark.Thread, fn *starlark.Builtin
 	}
 	if c == nil {
 		return starlark.None, fmt.Errorf("expected non-nil requests_client")
+	}
+
+	var reporter chan<- *requester.Result
+	if reporter, ok = t.Local("reporter").(chan<- *requester.Result); !ok {
+		return starlark.None, fmt.Errorf("expected reporter")
+	}
+	if reporter == nil {
+		return starlark.None, fmt.Errorf("expected non-nil reporter")
 	}
 
 	var urlString, dataVal, headersVal starlark.Value
@@ -316,12 +335,75 @@ func (r *requestsModule) fnRequestsPost(t *starlark.Thread, fn *starlark.Builtin
 		req.Header.Set("content-type", "application/x-www-form-urlencoded")
 	}
 
-	goresp, err := c.Do(req)
+	goresp, err := instrument(c, req, reporter)
 	if err != nil {
 		return starlark.None, fmt.Errorf("r.c.Do: %w", err)
 	}
 
 	return newResponse(goresp)
+}
+
+var startTime = time.Now()
+
+// now returns time.Duration using stdlib time
+func now() time.Duration { return time.Since(startTime) }
+
+func instrument(c *http.Client, req *http.Request, reporter chan<- *requester.Result) (*http.Response, error) {
+	s := now()
+	var size int64
+	var code int
+	var dnsStart, connStart, resStart, reqStart, delayStart time.Duration
+	var dnsDuration, connDuration, resDuration, reqDuration, delayDuration time.Duration
+
+	trace := &httptrace.ClientTrace{
+		DNSStart: func(info httptrace.DNSStartInfo) {
+			dnsStart = now()
+		},
+		DNSDone: func(dnsInfo httptrace.DNSDoneInfo) {
+			dnsDuration = now() - dnsStart
+		},
+		GetConn: func(h string) {
+			connStart = now()
+		},
+		GotConn: func(connInfo httptrace.GotConnInfo) {
+			if !connInfo.Reused {
+				connDuration = now() - connStart
+			}
+			reqStart = now()
+		},
+		WroteRequest: func(w httptrace.WroteRequestInfo) {
+			reqDuration = now() - reqStart
+			delayStart = now()
+		},
+		GotFirstResponseByte: func() {
+			delayDuration = now() - delayStart
+			resStart = now()
+		},
+	}
+	req = req.WithContext(httptrace.WithClientTrace(req.Context(), trace))
+	resp, err := c.Do(req)
+	if err == nil {
+		size = resp.ContentLength
+		code = resp.StatusCode
+	}
+
+	t := now()
+	resDuration = t - resStart
+	finish := t - s
+	reporter <- &requester.Result{
+		Offset:        s,
+		StatusCode:    code,
+		Duration:      finish,
+		Err:           err,
+		ContentLength: size,
+		ConnDuration:  connDuration,
+		DnsDuration:   dnsDuration,
+		ReqDuration:   reqDuration,
+		ResDuration:   resDuration,
+		DelayDuration: delayDuration,
+	}
+
+	return resp, err
 }
 
 // isFinite reports whether f represents a finite rational value.

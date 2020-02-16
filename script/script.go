@@ -173,7 +173,7 @@ func New(filename string) (*Script, error) {
 	return s, nil
 }
 
-func (s *Script) Do(ctx context.Context, c *http.Client) (nRequests int, err error) {
+func (s *Script) Do(ctx context.Context, c *http.Client, reporter chan<- *requester.Result) (nRequests int, err error) {
 	vars := &starlark.Dict{}
 
 	mainVal, ok := s.config.locals["main"]
@@ -190,6 +190,7 @@ func (s *Script) Do(ctx context.Context, c *http.Client) (nRequests int, err err
 	}
 	thread.SetLocal("context", ctx)
 	thread.SetLocal("requests_client", c)
+	thread.SetLocal("reporter", reporter)
 	mainCtx := &Module{
 		Name: "hithere_ctx",
 		Attrs: starlark.StringDict(map[string]starlark.Value{
@@ -208,3 +209,5 @@ func (s *Script) Do(ctx context.Context, c *http.Client) (nRequests int, err err
 func (s *Script) Clone() requester.Requester {
 	return s
 }
+
+var _ requester.Requester = (*Script)(nil)

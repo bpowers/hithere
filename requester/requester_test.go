@@ -33,7 +33,7 @@ type testRequester struct {
 	body []byte
 }
 
-func (t *testRequester) Do(ctx context.Context, c *http.Client) (nRequests int, err error) {
+func (t *testRequester) Do(ctx context.Context, c *http.Client, _ chan<- *Result) (nRequests int, err error) {
 	resp, err := c.Do(t.req)
 	if err != nil {
 		return 1, fmt.Errorf("c.Do: %w", err)
@@ -43,6 +43,23 @@ func (t *testRequester) Do(ctx context.Context, c *http.Client) (nRequests int, 
 	resp.Body.Close()
 
 	return 1, nil
+}
+
+// cloneRequest returns a clone of the provided *http.Request.
+// The clone is a shallow copy of the struct and its Header map.
+func cloneRequest(r *http.Request, body []byte) *http.Request {
+	// shallow copy of the struct
+	r2 := new(http.Request)
+	*r2 = *r
+	// deep copy of the Header
+	r2.Header = make(http.Header, len(r.Header))
+	for k, s := range r.Header {
+		r2.Header[k] = append([]string(nil), s...)
+	}
+	if len(body) > 0 {
+		r2.Body = ioutil.NopCloser(bytes.NewReader(body))
+	}
+	return r2
 }
 
 func (t *testRequester) Clone() Requester {

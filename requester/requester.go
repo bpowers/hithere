@@ -16,11 +16,10 @@
 package requester
 
 import (
-	"bytes"
 	"context"
 	"crypto/tls"
 	"io"
-	"io/ioutil"
+	"log"
 	"net/http"
 	"net/url"
 	"os"
@@ -34,22 +33,22 @@ import (
 const maxResult = 1000000
 const maxIdleConn = 500
 
-type result struct {
-	err           error
-	statusCode    int
-	offset        time.Duration
-	duration      time.Duration
-	connDuration  time.Duration // connection setup(DNS lookup + Dial up) duration
-	dnsDuration   time.Duration // dns lookup duration
-	reqDuration   time.Duration // request "write" duration
-	resDuration   time.Duration // response "read" duration
-	delayDuration time.Duration // delay between response and request
-	contentLength int64
+type Requester interface {
+	Do(ctx context.Context, c *http.Client, reporter chan<- *Result) (nRequests int, err error)
+	Clone() Requester
 }
 
-type Requester interface {
-	Do(ctx context.Context, c *http.Client) (nRequests int, err error)
-	Clone() Requester
+type Result struct {
+	Err           error
+	StatusCode    int
+	Offset        time.Duration
+	Duration      time.Duration
+	ConnDuration  time.Duration // connection setup(DNS lookup + Dial up) duration
+	DnsDuration   time.Duration // dns lookup duration
+	ReqDuration   time.Duration // request "write" duration
+	ResDuration   time.Duration // response "read" duration
+	DelayDuration time.Duration // delay between response and request
+	ContentLength int64
 }
 
 type Work struct {
@@ -89,7 +88,7 @@ type Work struct {
 	Writer io.Writer
 
 	initOnce sync.Once
-	results  chan *result
+	results  chan *Result
 	stopCh   chan struct{}
 	start    time.Duration
 
@@ -106,7 +105,7 @@ func (b *Work) writer() io.Writer {
 // Init initializes internal data-structures
 func (b *Work) Init() {
 	b.initOnce.Do(func() {
-		b.results = make(chan *result, min(b.C*1000, maxResult))
+		b.results = make(chan *Result, min(b.C*1000, maxResult))
 		b.stopCh = make(chan struct{}, b.C)
 	})
 }
@@ -143,17 +142,9 @@ func (b *Work) Finish() {
 func (b *Work) makeRequest(c *http.Client) {
 	ctx := context.Background()
 
-	s := now()
-
-	nRequests, err := b.Requester.Clone().Do(ctx, c)
-	_ = nRequests
-
-	t := now()
-	finish := t - s
-	b.results <- &result{
-		offset:   s,
-		duration: finish,
-		err:      err,
+	_, err := b.Requester.Clone().Do(ctx, c, b.results)
+	if err != nil {
+		log.Printf("requester.Do: %s", err)
 	}
 }
 
@@ -205,23 +196,6 @@ func (b *Work) runWorkers() {
 		}()
 	}
 	wg.Wait()
-}
-
-// cloneRequest returns a clone of the provided *http.Request.
-// The clone is a shallow copy of the struct and its Header map.
-func cloneRequest(r *http.Request, body []byte) *http.Request {
-	// shallow copy of the struct
-	r2 := new(http.Request)
-	*r2 = *r
-	// deep copy of the Header
-	r2.Header = make(http.Header, len(r.Header))
-	for k, s := range r.Header {
-		r2.Header[k] = append([]string(nil), s...)
-	}
-	if len(body) > 0 {
-		r2.Body = ioutil.NopCloser(bytes.NewReader(body))
-	}
-	return r2
 }
 
 func min(a, b int) int {
