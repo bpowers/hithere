@@ -66,7 +66,7 @@ var Module = &starlarkstruct.Module{
 	Name: "json",
 	Members: starlark.StringDict{
 		"encode": starlark.NewBuiltin("json.encode", Encode),
-		"decode": starlark.NewBuiltin("json.decode", decode),
+		"decode": starlark.NewBuiltin("json.decode", Decode),
 		"indent": starlark.NewBuiltin("json.indent", indent),
 	},
 }
@@ -230,7 +230,7 @@ func indent(thread *starlark.Thread, b *starlark.Builtin, args starlark.Tuple, k
 	return starlark.String(buf.String()), nil
 }
 
-func decode(thread *starlark.Thread, b *starlark.Builtin, args starlark.Tuple, kwargs []starlark.Tuple) (starlark.Value, error) {
+func Decode(thread *starlark.Thread, b *starlark.Builtin, args starlark.Tuple, kwargs []starlark.Tuple) (starlark.Value, error) {
 	var str string
 	if err := starlark.UnpackPositionalArgs(b.Name(), args, kwargs, 1, &str); err != nil {
 		return nil, err

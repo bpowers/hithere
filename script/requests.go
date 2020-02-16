@@ -10,11 +10,15 @@ import (
 	"fmt"
 	"io"
 	"io/ioutil"
+	"log"
+	"math"
 	"net/http"
 	"net/url"
+	"sort"
 	"strings"
 
 	"go.starlark.net/starlark"
+	"github.com/stripe/stripe-go/form"
 
 	"github.com/bpowers/hithere/script/starlarkjson"
 )
@@ -333,4 +337,114 @@ func (r *requestsModule) fnRequestsPost(t *starlark.Thread, fn *starlark.Builtin
 	}
 
 	return newResponse(goresp)
+}
+
+func goQuoteIsSafe(s string) bool {
+	for _, r := range s {
+		// JSON doesn't like Go's \xHH escapes for ASCII control codes,
+		// nor its \UHHHHHHHH escapes for runes >16 bits.
+		if r < 0x20 || r >= 0x10000 {
+			return false
+		}
+	}
+	return true
+}
+
+// isFinite reports whether f represents a finite rational value.
+// It is equivalent to !math.IsNan(f) && !math.IsInf(f, 0).
+func isFinite(f float64) bool {
+	return math.Abs(f) <= math.MaxFloat64
+}
+
+func urlencodeBody(v starlark.Value) ([]byte, error) {
+
+	body := form.Values{}
+
+	var emit func(x starlark.Value, keyParts []string) error
+	emit = func(x starlark.Value, keyParts []string) error {
+		switch x := x.(type) {
+		case json.Marshaler:
+			// Application-defined starlark.Value types
+			// may define their own JSON encoding.
+			data, err := x.MarshalJSON()
+			if err != nil {
+				return err
+			}
+			body.Add(form.FormatKey(keyParts), string(data))
+
+		case starlark.NoneType:
+			body.Add(form.FormatKey(keyParts), "null")
+
+		case starlark.Bool:
+			body.Add(form.FormatKey(keyParts), fmt.Sprintf("%t", x))
+
+		case starlark.Int:
+			// JSON imposes no limit on numbers,
+			// but the standard Go decoder may switch to float.
+			body.Add(form.FormatKey(keyParts), fmt.Sprint(x))
+
+		case starlark.Float:
+			if !isFinite(float64(x)) {
+				return fmt.Errorf("cannot encode non-finite float %v", x)
+			}
+			body.Add(form.FormatKey(keyParts), fmt.Sprintf("%g", x))
+
+		case starlark.String:
+			body.Add(form.FormatKey(keyParts), string(x))
+
+		case starlark.IterableMapping:
+			iter := x.Iterate()
+			defer iter.Done()
+			var k starlark.Value
+			for i := 0; iter.Next(&k); i++ {
+				s, ok := starlark.AsString(k)
+				if !ok {
+					return fmt.Errorf("%s has %s key, want string", x.Type(), k.Type())
+				}
+				v, found, err := x.Get(k)
+				if err != nil || !found {
+					log.Fatalf("internal error: mapping %s has %s among keys but value lookup fails", x.Type(), k)
+				}
+
+				if err := emit(v, append(keyParts, s)); err != nil {
+					return fmt.Errorf("in %s key %s: %v", x.Type(), k, err)
+				}
+			}
+
+		case starlark.Iterable:
+			// e.g. tuple, list
+			iter := x.Iterate()
+			defer iter.Done()
+			var elem starlark.Value
+			for i := 0; iter.Next(&elem); i++ {
+				if err := emit(elem, append(keyParts, fmt.Sprint(i))); err != nil {
+					return fmt.Errorf("at %s index %d: %v", x.Type(), i, err)
+				}
+			}
+
+		case starlark.HasAttrs:
+			// e.g. struct
+			var names []string
+			names = append(names, x.AttrNames()...)
+			sort.Strings(names)
+			for _, name := range names {
+				v, err := x.Attr(name)
+				if err != nil || v == nil {
+					log.Fatalf("internal error: dir(%s) includes %q but value has no .%s field", x.Type(), name, name)
+				}
+				if err := emit(v, append(keyParts, name)); err != nil {
+					return fmt.Errorf("in field .%s: %v", name, err)
+				}
+			}
+
+		default:
+			return fmt.Errorf("cannot encode %s as JSON", x.Type())
+		}
+		return nil
+	}
+
+	if err := emit(v, []string{}); err != nil {
+		return nil, fmt.Errorf("emit: %w", err)
+	}
+	return []byte(body.Encode()), nil
 }
