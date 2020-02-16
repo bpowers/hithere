@@ -13,14 +13,11 @@ import (
 	"log"
 	"math"
 	"net/http"
-	"net/url"
 	"sort"
 	"strings"
 
-	"go.starlark.net/starlark"
 	"github.com/stripe/stripe-go/form"
-
-	"github.com/bpowers/hithere/script/starlarkjson"
+	"go.starlark.net/starlark"
 )
 
 var responseAttrs = []string{
@@ -105,8 +102,7 @@ func (r *response) Hash() (uint32, error) {
 }
 
 func (r *response) AttrNames() []string {
-	// callers must not modify the result.
-	return []string{}
+	return responseAttrs
 }
 
 type responseAttr struct {
@@ -158,7 +154,7 @@ func (r *responseAttr) json() (starlark.Value, error) {
 				if err != nil {
 					return nil, fmt.Errorf("in object field .%s, %v", k, err)
 				}
-				dict.SetKey(starlark.String(k), vv) // can't fail
+				_ = dict.SetKey(starlark.String(k), vv) // can't fail
 			}
 			return dict, nil
 		case []interface{}: // array
@@ -181,7 +177,7 @@ func (r *responseAttr) json() (starlark.Value, error) {
 	return v, nil
 }
 
-func (r *responseAttr) CallInternal(thread *starlark.Thread, args starlark.Tuple, kwargs []starlark.Tuple) (starlark.Value, error) {
+func (r *responseAttr) CallInternal(*starlark.Thread, starlark.Tuple, []starlark.Tuple) (starlark.Value, error) {
 	switch r.attr {
 	case "raise_for_status":
 		code := r.r.resp.StatusCode
@@ -266,33 +262,18 @@ func (r *requestsModule) fnRequestsPost(t *starlark.Thread, fn *starlark.Builtin
 		return nil, fmt.Errorf("UnpackArgs: %w", err)
 	}
 
+	var isUrlEncodedBody bool
+
 	var body io.Reader
 	if data, ok := dataVal.(starlark.String); ok {
 		body = bytes.NewReader([]byte(data))
 	} else if data, ok := dataVal.(*starlark.Dict); ok {
-		urlData := url.Values{}
-		for _, kVal := range data.Keys() {
-			var k string
-			if kStr, ok := kVal.(starlark.String); ok {
-				k = kStr.GoString()
-			} else {
-				k = kVal.String()
-			}
-			vVal, found, err := data.Get(kVal)
-			if !found {
-				return nil, fmt.Errorf("data.Get(%v): %w", k, err)
-			}
-			if v, ok := vVal.(starlark.String); ok {
-				urlData.Set(k, v.GoString())
-			} else {
-				v, err := starlarkjson.Encode(t, fn, []starlark.Value{vVal}, nil)
-				if err != nil {
-					return nil, fmt.Errorf("starjson.Encode(%v): %w", v, err)
-				}
-				urlData.Set(k, v.(starlark.String).GoString())
-			}
+		bodyStr, err := urlencodeBody(data)
+		if err != nil {
+			return nil, fmt.Errorf("urlencodeBody: %w", err)
 		}
-		body = strings.NewReader(urlData.Encode())
+		body = strings.NewReader(bodyStr)
+		isUrlEncodedBody = true
 	} else {
 		return starlark.None, fmt.Errorf("expected a string or dict for data")
 	}
@@ -316,7 +297,7 @@ func (r *requestsModule) fnRequestsPost(t *starlark.Thread, fn *starlark.Builtin
 				k = kVal.String()
 			}
 			vVal, found, err := headers.Get(kVal)
-			if !found {
+			if !found || vVal == nil {
 				return nil, fmt.Errorf("data.Get(%v): %w", kVal, err)
 			}
 			var v string
@@ -331,6 +312,10 @@ func (r *requestsModule) fnRequestsPost(t *starlark.Thread, fn *starlark.Builtin
 		return starlark.None, fmt.Errorf("expected a dict for headers")
 	}
 
+	if isUrlEncodedBody && req.Header.Get("content-type") == "" {
+		req.Header.Set("content-type", "application/x-www-form-urlencoded")
+	}
+
 	goresp, err := c.Do(req)
 	if err != nil {
 		return starlark.None, fmt.Errorf("r.c.Do: %w", err)
@@ -339,24 +324,13 @@ func (r *requestsModule) fnRequestsPost(t *starlark.Thread, fn *starlark.Builtin
 	return newResponse(goresp)
 }
 
-func goQuoteIsSafe(s string) bool {
-	for _, r := range s {
-		// JSON doesn't like Go's \xHH escapes for ASCII control codes,
-		// nor its \UHHHHHHHH escapes for runes >16 bits.
-		if r < 0x20 || r >= 0x10000 {
-			return false
-		}
-	}
-	return true
-}
-
 // isFinite reports whether f represents a finite rational value.
 // It is equivalent to !math.IsNan(f) && !math.IsInf(f, 0).
 func isFinite(f float64) bool {
 	return math.Abs(f) <= math.MaxFloat64
 }
 
-func urlencodeBody(v starlark.Value) ([]byte, error) {
+func urlencodeBody(v starlark.Value) (string, error) {
 
 	body := form.Values{}
 
@@ -444,7 +418,7 @@ func urlencodeBody(v starlark.Value) ([]byte, error) {
 	}
 
 	if err := emit(v, []string{}); err != nil {
-		return nil, fmt.Errorf("emit: %w", err)
+		return "", fmt.Errorf("emit: %w", err)
 	}
-	return []byte(body.Encode()), nil
+	return body.Encode(), nil
 }

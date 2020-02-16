@@ -39,7 +39,7 @@ func TestNestedSerialize(t *testing.T) {
 		if err != nil {
 			t.Fatalf("urlencodeBody: %s", err)
 		}
-		if test.expected != string(body) {
+		if test.expected != body {
 			t.Fatalf("expected equal:\n%s\n%s\n", test.expected, string(body))
 		}
 	}
