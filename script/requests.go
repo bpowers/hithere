@@ -6,8 +6,8 @@ package script
 
 import (
 	"bytes"
-	"fmt"
 	"encoding/json"
+	"fmt"
 	"io"
 	"io/ioutil"
 	"net/http"
@@ -130,7 +130,7 @@ func (r *responseAttr) Hash() (uint32, error) {
 }
 
 func (r *responseAttr) json() (starlark.Value, error) {
-		var x interface{}
+	var x interface{}
 	if err := json.Unmarshal(r.r.body, &x); err != nil {
 		return nil, fmt.Errorf("response.json: %w", err)
 	}
@@ -202,7 +202,7 @@ func RequestsModule() *requestsModule {
 		Module: Module{
 			Name: "requests",
 			Attrs: starlark.StringDict{
-				"get": starlark.None,
+				"get":  starlark.None,
 				"post": starlark.None,
 			},
 		},

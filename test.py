@@ -1,3 +1,6 @@
+#!/usr/bin/env python3
+
+import requests
 
 
 def do_one():
@@ -9,7 +12,7 @@ def do_one():
         "card[cvc]": 314,
     }
     headers = {
-        'authorization': 'Bearer sk_test_blurp',
+        'authorization': 'Bearer pk_test_NcsIuinz7RDJll45jhSBGgBr006F0r6UkQ',
     }
     r = requests.post(url, data=payload, headers=headers)
 
@@ -19,5 +22,10 @@ def do_one():
     # we expect an HTTP 410
     # r.raise_for_status()
 
-def main(ctx):
+
+def main(ctx={}):
     do_one()
+
+
+if __name__ == '__main__':
+    exit(main())

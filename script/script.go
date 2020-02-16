@@ -12,6 +12,7 @@ import (
 	"os"
 	"path"
 	"path/filepath"
+	"regexp"
 	"strings"
 
 	"go.starlark.net/starlark"
@@ -92,6 +93,12 @@ type loadOptions struct {
 	fileReader FileReader
 }
 
+var (
+	ifNameMainRe     = regexp.MustCompile("(?s)\nif\\s+__name__\\s+==.*$")
+	importRequestsRe = regexp.MustCompile("import\\s+requests")
+	shebangRe        = regexp.MustCompile("^#!.*")
+)
+
 // from skycfg
 func loadImpl(ctx context.Context, opts *loadOptions, filename string) (starlark.StringDict, error) {
 	reader := opts.fileReader
@@ -125,6 +132,10 @@ func loadImpl(ctx context.Context, opts *loadOptions, filename string) (starlark
 			cache[modulePath] = &cacheEntry{nil, err}
 			return nil, err
 		}
+
+		moduleSource = shebangRe.ReplaceAll(moduleSource, []byte(""))
+		moduleSource = importRequestsRe.ReplaceAll(moduleSource, []byte(""))
+		moduleSource = ifNameMainRe.ReplaceAll(moduleSource, []byte("\n"))
 
 		cache[modulePath] = nil
 		globals, err := starlark.ExecFile(thread, modulePath, moduleSource, opts.globals)
