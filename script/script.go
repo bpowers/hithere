@@ -18,7 +18,7 @@ import (
 	"go.starlark.net/starlark"
 
 	"github.com/bpowers/hithere/requester"
-	"github.com/bpowers/hithere/script/json"
+	"github.com/bpowers/hithere/script/starlarkjson"
 )
 
 type Script struct {
@@ -29,7 +29,7 @@ type Script struct {
 // Returns proto module separately for (optional) extra initialization.
 func predeclaredModules() (modules starlark.StringDict) {
 	return starlark.StringDict{
-		"json":     json.Module,
+		"json":     starlarkjson.Module,
 		"requests": RequestsModule(),
 	}
 }

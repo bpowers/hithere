@@ -4,7 +4,7 @@
 
 // Package starlarkjson defines utilities for converting Starlark values
 // to/from JSON strings. See www.json.org.
-package json
+package starlarkjson
 
 import (
 	"bytes"

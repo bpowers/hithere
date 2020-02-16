@@ -16,7 +16,7 @@ import (
 
 	"go.starlark.net/starlark"
 
-	starjson "github.com/bpowers/hithere/script/json"
+	"github.com/bpowers/hithere/script/starlarkjson"
 )
 
 var responseAttrs = []string{
@@ -281,7 +281,7 @@ func (r *requestsModule) fnRequestsPost(t *starlark.Thread, fn *starlark.Builtin
 			if v, ok := vVal.(starlark.String); ok {
 				urlData.Set(k, v.GoString())
 			} else {
-				v, err := starjson.Encode(t, fn, []starlark.Value{vVal}, nil)
+				v, err := starlarkjson.Encode(t, fn, []starlark.Value{vVal}, nil)
 				if err != nil {
 					return nil, fmt.Errorf("starjson.Encode(%v): %w", v, err)
 				}
