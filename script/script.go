@@ -182,16 +182,16 @@ func New(filename string) (*Script, error) {
 	return s, nil
 }
 
-func (s *Script) Do(ctx context.Context, client *http.Client, reporter requester.Reporter) (nRequests int, err error) {
+func (s *Script) Do(ctx context.Context, client *http.Client, reporter requester.Reporter) (err error) {
 	vars := &starlark.Dict{}
 
 	mainVal, ok := s.config.locals["main"]
 	if !ok {
-		return 0, fmt.Errorf("no `main' function found in %q", s.config.filename)
+		return fmt.Errorf("no `main' function found in %q", s.config.filename)
 	}
 	main, ok := mainVal.(starlark.Callable)
 	if !ok {
-		return 0, fmt.Errorf("`main' must be a function (got a %s)", mainVal.Type())
+		return fmt.Errorf("`main' must be a function (got a %s)", mainVal.Type())
 	}
 
 	tls := &scriptTls{
@@ -215,10 +215,10 @@ func (s *Script) Do(ctx context.Context, client *http.Client, reporter requester
 	args := starlark.Tuple([]starlark.Value{mainCtx})
 	_, err = starlark.Call(thread, main, args, nil)
 	if err != nil {
-		return 0, err
+		return err
 	}
 
-	return tls.count, nil
+	return nil
 }
 
 func (s *Script) Clone() requester.Requester {

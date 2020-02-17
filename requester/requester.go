@@ -21,10 +21,12 @@ import (
 	"fmt"
 	"io"
 	"log"
+	"math"
 	"net/http"
 	"net/url"
 	"os"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"golang.org/x/net/http2"
@@ -44,7 +46,7 @@ type Reporter interface {
 }
 
 type Requester interface {
-	Do(ctx context.Context, c *http.Client, reporter Reporter) (nRequests int, err error)
+	Do(ctx context.Context, c *http.Client, reporter Reporter) (err error)
 	Clone() Requester
 }
 
@@ -106,6 +108,7 @@ type Work struct {
 
 type workReporter struct {
 	results   chan<- *Result
+	count     int32
 	userAgent string
 }
 
@@ -116,7 +119,11 @@ func (w *workReporter) Finish(r *Result) {
 }
 
 func (w *workReporter) Start() {
-	// TODO
+	atomic.AddInt32(&w.count, 1)
+}
+
+func (w *workReporter) Count() int {
+	return int(atomic.LoadInt32(&w.count))
 }
 
 func (w *workReporter) UserAgent() string {
@@ -167,20 +174,17 @@ func (b *Work) Finish() {
 	b.report.finalize(total)
 }
 
-func (b *Work) makeRequests(c *http.Client, r *workReporter) int {
+func (b *Work) makeRequests(c *http.Client, r *workReporter) {
 	ctx := context.Background()
 
-	n, err := b.Requester.Clone().Do(ctx, c, r)
+	err := b.Requester.Clone().Do(ctx, c, r)
 	if err != nil {
 		log.Printf("requester.Do: %s", err)
 	}
-
-	return n
 }
 
 func (b *Work) runWorker(client *http.Client, n int) int {
-	count := 0
-	reporter := &workReporter{b.results, b.UserAgent}
+	reporter := &workReporter{b.results, 0, b.UserAgent}
 
 	// if n == 0, run forever
 	i := -1
@@ -191,16 +195,16 @@ func (b *Work) runWorker(client *http.Client, n int) int {
 		// Check if application is stopped. Do not send into a closed channel.
 		select {
 		case <-b.stopCh:
-			return count
+			return reporter.Count()
 		default:
-			count += b.makeRequests(client, reporter)
+			b.makeRequests(client, reporter)
 		}
 		if n > 0 {
 			i++
 		}
 	}
 
-	return count
+	return reporter.Count()
 }
 
 func (b *Work) runN(client *http.Client) {
@@ -225,8 +229,16 @@ func (b *Work) timeOne(client *http.Client) (int, time.Duration) {
 
 func (b *Work) runRPS(client *http.Client) {
 	n, delta := b.timeOne(client)
+	rpsMeasured := float64(n) / delta.Seconds()
+	rpsTarget := float64(b.RPS)
 
-	fmt.Printf("%d requests took %s\n", n, delta.String())
+	nWorkers := max(int(math.Ceil(rpsTarget/rpsMeasured)), 1)
+
+	for i := 0; i < nWorkers; i++ {
+
+	}
+
+	fmt.Printf("%d workers for %f RPS (%d / %f sec)\n", nWorkers, rpsTarget, n, delta.Seconds())
 }
 
 func (b *Work) runWorkers() {

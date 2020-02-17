@@ -31,17 +31,17 @@ type testRequester struct {
 	body []byte
 }
 
-func (t *testRequester) Do(ctx context.Context, c *http.Client, _ Reporter) (nRequests int, err error) {
+func (t *testRequester) Do(ctx context.Context, c *http.Client, _ Reporter) error {
 	resp, err := c.Do(t.req)
 	if err != nil {
 		fmt.Printf("ah shit.\n")
-		return 1, fmt.Errorf("c.Do: %w", err)
+		return fmt.Errorf("c.Do: %w", err)
 	}
 
 	io.Copy(ioutil.Discard, resp.Body)
 	resp.Body.Close()
 
-	return 1, nil
+	return nil
 }
 
 // cloneRequest returns a clone of the provided *http.Request.
