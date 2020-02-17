@@ -22,6 +22,7 @@ import (
 	"io"
 	"log"
 	"math"
+	"math/rand"
 	"net/http"
 	"net/url"
 	"os"
@@ -104,11 +105,13 @@ type Work struct {
 	start    time.Duration
 
 	report *report
+
+	workerCount int32
 }
 
 type workReporter struct {
 	results   chan<- *Result
-	count     int32
+	count     uint32
 	userAgent string
 }
 
@@ -119,11 +122,11 @@ func (w *workReporter) Finish(r *Result) {
 }
 
 func (w *workReporter) Start() {
-	atomic.AddInt32(&w.count, 1)
+	atomic.AddUint32(&w.count, 1)
 }
 
 func (w *workReporter) Count() int {
-	return int(atomic.LoadInt32(&w.count))
+	return int(atomic.LoadUint32(&w.count))
 }
 
 func (w *workReporter) UserAgent() string {
@@ -183,6 +186,14 @@ func (b *Work) makeRequests(c *http.Client, r *workReporter) {
 	}
 }
 
+func (b *Work) incWorkerCount() {
+	atomic.AddInt32(&b.workerCount, 1)
+}
+
+func (b *Work) decWorkerCount() {
+	atomic.AddInt32(&b.workerCount, -1)
+}
+
 func (b *Work) runWorker(client *http.Client, n int) int {
 	reporter := &workReporter{b.results, 0, b.UserAgent}
 
@@ -222,23 +233,49 @@ func (b *Work) runN(client *http.Client) {
 }
 
 func (b *Work) timeOne(client *http.Client) (int, time.Duration) {
+	reporter := &workReporter{make(chan *Result, maxResult), 0, b.UserAgent}
+	defer func() {
+		close(reporter.results)
+	}()
+
 	start := now()
-	n := b.runWorker(client, 1)
-	return n, now() - start
+	b.makeRequests(client, reporter)
+	duration := now() - start
+
+	return reporter.Count(), duration
 }
 
 func (b *Work) runRPS(client *http.Client) {
-	n, delta := b.timeOne(client)
-	rpsMeasured := float64(n) / delta.Seconds()
+	n, origDelta := b.timeOne(client)
+	origDeltaMs := float64(origDelta.Milliseconds())
+	rpsMeasured := float64(n) / origDelta.Seconds()
 	rpsTarget := float64(b.RPS)
 
+	b.start = now()
+
 	nWorkers := max(int(math.Ceil(rpsTarget/rpsMeasured)), 1)
+	fmt.Printf("%d workers for %f RPS (%d / %f sec)\n", nWorkers, rpsTarget, n, origDelta.Seconds())
 
+	var wg sync.WaitGroup
 	for i := 0; i < nWorkers; i++ {
+		wg.Add(1)
+		go func() {
+			b.incWorkerCount()
+			defer b.decWorkerCount()
 
+			// ensure we don't end up with all these workers in lock-step
+			maxSleep := math.Ceil(origDeltaMs * 1.2)
+			randSleep := rand.Float64() * maxSleep
+			sleep := time.Duration(int64(math.Ceil(randSleep))) * time.Millisecond
+			time.Sleep(sleep)
+
+			b.runWorker(client, 0)
+
+			wg.Done()
+		}()
 	}
+	wg.Wait()
 
-	fmt.Printf("%d workers for %f RPS (%d / %f sec)\n", nWorkers, rpsTarget, n, delta.Seconds())
 }
 
 func (b *Work) runWorkers() {
