@@ -100,20 +100,23 @@ type Work struct {
 	// Writer is where results will be written. If nil, results are written to stdout.
 	Writer io.Writer
 
-	initOnce sync.Once
-	results  chan *Result
-	stopCh   chan struct{}
-	start    time.Duration
+	initOnce     sync.Once
+	results      chan *Result
+	stopCh       chan struct{}
+	workerStopCh chan struct{}
+	start        time.Duration
 
 	report *report
 
 	workerCount int32
 
-	counter *ratecounter.RateCounter
+	counter1s *ratecounter.RateCounter
+	counter5s *ratecounter.RateCounter
 }
 
 type workReporter struct {
-	counter   *ratecounter.RateCounter
+	counter1s *ratecounter.RateCounter
+	counter5s *ratecounter.RateCounter
 	results   chan<- *Result
 	count     uint32
 	userAgent string
@@ -127,7 +130,8 @@ func (w *workReporter) Finish(r *Result) {
 
 func (w *workReporter) Start() {
 	atomic.AddUint32(&w.count, 1)
-	w.counter.Incr(1)
+	w.counter1s.Incr(1)
+	w.counter5s.Incr(1)
 }
 
 func (w *workReporter) Count() int {
@@ -150,7 +154,9 @@ func (b *Work) Init() {
 	b.initOnce.Do(func() {
 		b.results = make(chan *Result, maxResult)
 		b.stopCh = make(chan struct{}, maxConcurrency)
-		b.counter = ratecounter.NewRateCounter(1 * time.Second)
+		b.workerStopCh = make(chan struct{}, maxConcurrency)
+		b.counter1s = ratecounter.NewRateCounter(2 * time.Second)
+		b.counter5s = ratecounter.NewRateCounter(5 * time.Second)
 	})
 }
 
@@ -200,8 +206,18 @@ func (b *Work) decWorkerCount() {
 	atomic.AddInt32(&b.workerCount, -1)
 }
 
+func (b *Work) getWorkerCount() int {
+	return int(atomic.LoadInt32(&b.workerCount))
+}
+
 func (b *Work) runWorker(client *http.Client, n int) int {
-	reporter := &workReporter{b.counter, b.results, 0, b.UserAgent}
+	reporter := &workReporter{
+		counter1s: b.counter1s,
+		counter5s: b.counter5s,
+		results:   b.results,
+		count:     0,
+		userAgent: b.UserAgent,
+	}
 
 	// if n == 0, run forever
 	i := -1
@@ -212,6 +228,8 @@ func (b *Work) runWorker(client *http.Client, n int) int {
 		// Check if application is stopped. Do not send into a closed channel.
 		select {
 		case <-b.stopCh:
+			return reporter.Count()
+		case <-b.workerStopCh:
 			return reporter.Count()
 		default:
 			b.makeRequests(client, reporter)
@@ -239,7 +257,13 @@ func (b *Work) runN(client *http.Client) {
 }
 
 func (b *Work) timeOne(client *http.Client) (int, time.Duration) {
-	reporter := &workReporter{ratecounter.NewRateCounter(1 * time.Second), make(chan *Result, maxResult), 0, b.UserAgent}
+	reporter := &workReporter{
+		counter1s: ratecounter.NewRateCounter(1 * time.Second),
+		counter5s: ratecounter.NewRateCounter(5 * time.Second),
+		results:   make(chan *Result, maxResult),
+		count:     0,
+		userAgent: b.UserAgent,
+	}
 	defer func() {
 		close(reporter.results)
 	}()
@@ -251,6 +275,24 @@ func (b *Work) timeOne(client *http.Client) (int, time.Duration) {
 	return reporter.Count(), duration
 }
 
+func (b *Work) runRPSWorker(origDeltaMs float64, wg *sync.WaitGroup, client *http.Client) {
+	wg.Add(1)
+	go func() {
+		b.incWorkerCount()
+		defer b.decWorkerCount()
+
+		// ensure we don't end up with all these workers in lock-step
+		maxSleep := math.Ceil(origDeltaMs * 1.2)
+		randSleep := rand.Float64() * maxSleep
+		sleep := time.Duration(int64(math.Ceil(randSleep))) * time.Millisecond
+		time.Sleep(sleep)
+
+		b.runWorker(client, 0)
+
+		wg.Done()
+	}()
+}
+
 func (b *Work) runRPS(client *http.Client) {
 	n, origDelta := b.timeOne(client)
 	origDeltaMs := float64(origDelta.Milliseconds())
@@ -259,41 +301,79 @@ func (b *Work) runRPS(client *http.Client) {
 
 	b.start = now()
 
+	// target rps / n workers = measured rps / 1 worker
+
 	nWorkers := max(int(math.Ceil(rpsTarget/rpsMeasured)), 1)
 	fmt.Printf("%d workers for %f RPS (%d / %f sec)\n", nWorkers, rpsTarget, n, origDelta.Seconds())
 
 	var wg sync.WaitGroup
-	for i := 0; i < nWorkers; i++ {
-		wg.Add(1)
-		go func() {
-			b.incWorkerCount()
-			defer b.decWorkerCount()
-
-			// ensure we don't end up with all these workers in lock-step
-			maxSleep := math.Ceil(origDeltaMs * 1.2)
-			randSleep := rand.Float64() * maxSleep
-			sleep := time.Duration(int64(math.Ceil(randSleep))) * time.Millisecond
-			time.Sleep(sleep)
-
-			b.runWorker(client, 0)
-
-			wg.Done()
-		}()
+	for i := 0; i < 2; i++ {
+		b.runRPSWorker(origDeltaMs, &wg, client)
 	}
-	go b.consoleReport()
-	wg.Wait()
+
+	b.consoleReport(origDeltaMs, &wg, client)
 }
 
-func (b *Work) consoleReport() {
-	ticker := time.NewTicker(1 * time.Second)
+func (b *Work) consoleReport(origDeltaMs float64, wg *sync.WaitGroup, client *http.Client) {
+	const dt = 5
+	const Kp = 5
+	const Ki = 3
+	const Kd = 3
+	time.Sleep(5 * time.Second)
+
+	ticker := time.NewTicker(dt * time.Second)
 	defer func() {
 		ticker.Stop()
 	}()
 
+	defer func() {
+		wg.Wait()
+	}()
+
+	prevError := float64(0)
+	integral := float64(0)
+
 	for {
 		select {
+		case <-b.stopCh:
+			return
 		case <-ticker.C:
-			fmt.Printf("current: %d rps\n", b.counter.Rate())
+			rpsA := float64(b.counter1s.Rate()) / 2
+			rpsB := float64(b.counter5s.Rate()) / 5
+			rpsMeasured := (rpsA + rpsB) / 2
+			rpsTarget := float64(b.RPS)
+
+			// target rps / target workers = measured rps / m workers
+			// m workers * target rps / measured rps = target workers
+
+			workers := b.getWorkerCount()
+			workerGoalFloat := float64(workers) * rpsTarget / rpsMeasured
+			workerGoal := max(int(math.Ceil(workerGoalFloat)), 1)
+			fmt.Printf("\tgoal %d (%.1f)\n", workerGoal, workerGoalFloat)
+
+			error := float64(workerGoal - workers)
+			integral = integral + error*dt
+			derivative := (error - prevError) / dt
+			output := Kp*error + Ki*integral + Kd*derivative
+			prevError = error
+
+			newWorkers := float64(workers) * (1 + output/100)
+			workerDiff := int(math.Round(newWorkers)) - workers
+
+			fmt.Printf("current: %.1f rps (%d workers) (error: %.1f out: %.1f, newWorkers: %.1f)\n", rpsMeasured, b.getWorkerCount(), error, output, newWorkers)
+
+			// avoid flip flopping around by ignoring 1 worker diffs
+			if workerDiff > 1 {
+				fmt.Printf("spawning %d new workers\n", workerDiff)
+				for i := 0; i < workerDiff; i++ {
+					b.runRPSWorker(origDeltaMs, wg, client)
+				}
+			} else if workerDiff < -1 {
+				fmt.Printf("killing %d workers\n", -workerDiff)
+				for i := 0; i < -workerDiff; i++ {
+					b.workerStopCh <- struct{}{}
+				}
+			}
 		}
 	}
 }
@@ -309,7 +389,9 @@ func (b *Work) runWorkers() {
 		Proxy:               http.ProxyURL(b.ProxyAddr),
 	}
 	if b.H2 {
-		http2.ConfigureTransport(tr)
+		if err := http2.ConfigureTransport(tr); err != nil {
+			log.Fatalf("http2.ConfigureTransport: %s", err)
+		}
 	} else {
 		tr.TLSNextProto = make(map[string]func(string, *tls.Conn) http.RoundTripper)
 	}
