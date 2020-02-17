@@ -45,6 +45,8 @@ var (
 	t = flag.Int("t", 20, "")
 	z = flag.Duration("z", 0, "")
 
+	rps = flag.Int("rps", 5, "")
+
 	h2   = flag.Bool("h2", false, "")
 	cpus = flag.Int("cpus", runtime.GOMAXPROCS(-1), "")
 
@@ -57,9 +59,6 @@ var usage = `Usage: hey [options...] <script>
 
 Options:
   -n  Number of requests to run. Default is 200.
-  -c  Number of workers to run concurrently. Total number of requests cannot
-      be smaller than the concurrency level. Default is 50.
-  -q  Rate limit, in queries per second (QPS) per worker. Default is no rate limit.
   -z  Duration of application to send requests. When duration is reached,
       application stops and exits. If duration is specified, n is ignored.
       Examples: -z 10s -z 3m.
@@ -72,6 +71,7 @@ Options:
 
   -host	HTTP Host header.
 
+  -rps    requests per second (RPS) to target generating
   -script starlark script to use as a load generator; URL and HTTP options ignored.
 
   -disable-compression  Disable compression.
@@ -97,23 +97,16 @@ func main() {
 
 	runtime.GOMAXPROCS(*cpus)
 	num := *n
-	conc := *c
-	q := *q
 	dur := *z
 
 	if dur > 0 {
 		num = math.MaxInt32
-		if conc <= 0 {
-			usageAndExit("-c cannot be smaller than 1.")
-		}
-	} else {
-		if num <= 0 || conc <= 0 {
-			usageAndExit("-n and -c cannot be smaller than 1.")
-		}
+	} else if num <= 0 {
+		usageAndExit("-n cannot be smaller than 1.")
+	}
 
-		if num < conc {
-			usageAndExit("-n cannot be less than -c.")
-		}
+	if *rps <= 0 {
+		usageAndExit("-rps cannot be smaller than 1.")
 	}
 
 	path := flag.Args()[0]
@@ -135,8 +128,7 @@ func main() {
 	w := &requester.Work{
 		Requester:          req,
 		N:                  num,
-		C:                  conc,
-		QPS:                q,
+		RPS:                *rps,
 		Timeout:            *t,
 		DisableCompression: *disableCompression,
 		DisableKeepAlives:  *disableKeepAlives,

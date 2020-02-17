@@ -22,10 +22,8 @@ import (
 	"io/ioutil"
 	"net/http"
 	"net/http/httptest"
-	"sync"
 	"sync/atomic"
 	"testing"
-	"time"
 )
 
 type testRequester struct {
@@ -36,6 +34,7 @@ type testRequester struct {
 func (t *testRequester) Do(ctx context.Context, c *http.Client, _ chan<- *Result) (nRequests int, err error) {
 	resp, err := c.Do(t.req)
 	if err != nil {
+		fmt.Printf("ah shit.\n")
 		return 1, fmt.Errorf("c.Do: %w", err)
 	}
 
@@ -80,39 +79,11 @@ func TestN(t *testing.T) {
 	w := &Work{
 		Requester: &testRequester{req, nil},
 		N:         20,
-		C:         2,
 	}
 	w.Run()
 	if count != 20 {
 		t.Errorf("Expected to send 20 requests, found %v", count)
 	}
-}
-
-func TestQps(t *testing.T) {
-	var wg sync.WaitGroup
-	var count int64
-	handler := func(w http.ResponseWriter, r *http.Request) {
-		atomic.AddInt64(&count, int64(1))
-	}
-	server := httptest.NewServer(http.HandlerFunc(handler))
-	defer server.Close()
-
-	req, _ := http.NewRequest("GET", server.URL, nil)
-	w := &Work{
-		Requester: &testRequester{req, nil},
-		N:         20,
-		C:         2,
-		QPS:       1,
-	}
-	wg.Add(1)
-	time.AfterFunc(time.Second, func() {
-		if count > 2 {
-			t.Errorf("Expected to work at most 2 times, found %v", count)
-		}
-		wg.Done()
-	})
-	go w.Run()
-	wg.Wait()
 }
 
 func TestRequest(t *testing.T) {
@@ -136,7 +107,6 @@ func TestRequest(t *testing.T) {
 	w := &Work{
 		Requester: &testRequester{req, nil},
 		N:         1,
-		C:         1,
 	}
 	w.Run()
 	if uri != "/" {
@@ -162,6 +132,8 @@ func TestBody(t *testing.T) {
 		body, _ := ioutil.ReadAll(r.Body)
 		if string(body) == "Body" {
 			atomic.AddInt64(&count, 1)
+		} else {
+			fmt.Printf("welp.\n")
 		}
 	}
 	server := httptest.NewServer(http.HandlerFunc(handler))
@@ -171,7 +143,6 @@ func TestBody(t *testing.T) {
 	w := &Work{
 		Requester: &testRequester{req, []byte("Body")},
 		N:         10,
-		C:         1,
 	}
 	w.Run()
 	if count != 10 {
