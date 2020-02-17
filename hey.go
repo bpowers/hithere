@@ -40,7 +40,7 @@ var (
 	output = flag.String("o", "", "")
 
 	c = flag.Int("c", 2, "")
-	n = flag.Int("n", 2, "")
+	n = flag.Int("n", 0, "")
 	q = flag.Float64("q", 0, "")
 	t = flag.Int("t", 20, "")
 	z = flag.Duration("z", 0, "")
@@ -101,8 +101,8 @@ func main() {
 
 	if dur > 0 {
 		num = math.MaxInt32
-	} else if num <= 0 {
-		usageAndExit("-n cannot be smaller than 1.")
+	} else if num < 0 {
+		usageAndExit("-n cannot be smaller than 0 (0 means do RPS test).")
 	}
 
 	if *rps <= 0 {

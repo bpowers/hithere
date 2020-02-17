@@ -169,9 +169,33 @@ func (b *Work) runWorker(client *http.Client, n int) {
 	}
 }
 
-func (b *Work) runWorkers() {
-	var wg sync.WaitGroup
+func (b *Work) runN(client *http.Client) {
 
+	var wg sync.WaitGroup
+	// Ignore the case where b.N % b.C != 0.
+	for i := 0; i < 1; i++ {
+		wg.Add(1)
+		go func() {
+			b.runWorker(client, b.N)
+			wg.Done()
+		}()
+	}
+	wg.Wait()
+}
+
+func (b *Work) timeOne(client *http.Client) time.Duration {
+	start := now()
+	b.runWorker(client, 1)
+	return now() - start
+}
+
+func (b *Work) runRPS(client *http.Client) {
+	delta := b.timeOne(client)
+
+	fmt.Printf("n requests took %s\n", delta.String())
+}
+
+func (b *Work) runWorkers() {
 	tr := &http.Transport{
 		TLSClientConfig: &tls.Config{
 			InsecureSkipVerify: true,
@@ -188,17 +212,11 @@ func (b *Work) runWorkers() {
 	}
 	client := &http.Client{Transport: tr, Timeout: time.Duration(b.Timeout) * time.Second}
 
-	fmt.Printf("doing")
-
-	// Ignore the case where b.N % b.C != 0.
-	for i := 0; i < 1; i++ {
-		wg.Add(1)
-		go func() {
-			b.runWorker(client, b.N)
-			wg.Done()
-		}()
+	if b.N > 0 {
+		b.runN(client)
+	} else {
+		b.runRPS(client)
 	}
-	wg.Wait()
 }
 
 func min(a, b int) int {
