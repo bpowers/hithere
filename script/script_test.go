@@ -22,8 +22,8 @@ func TestNestedSerialize(t *testing.T) {
 			expected: `a=b`,
 		},
 		{
-			src:      `{"card": {"number": "4242424242424242", "cvc": 123}}`,
-			expected: `card[number]=4242424242424242&card[cvc]=123`,
+			src:      `{"card": {"number": "4242424242424242"}}`,
+			expected: `card[number]=4242424242424242`,
 		},
 	}
 

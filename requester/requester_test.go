@@ -31,7 +31,7 @@ type testRequester struct {
 	body []byte
 }
 
-func (t *testRequester) Do(ctx context.Context, c *http.Client, _ chan<- *Result) (nRequests int, err error) {
+func (t *testRequester) Do(ctx context.Context, c *http.Client, _ Reporter) (nRequests int, err error) {
 	resp, err := c.Do(t.req)
 	if err != nil {
 		fmt.Printf("ah shit.\n")

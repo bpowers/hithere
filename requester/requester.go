@@ -37,8 +37,13 @@ const (
 	maxIdleConn    = 500
 )
 
+type Reporter interface {
+	Start()
+	Finish(r *Result)
+}
+
 type Requester interface {
-	Do(ctx context.Context, c *http.Client, reporter chan<- *Result) (nRequests int, err error)
+	Do(ctx context.Context, c *http.Client, reporter Reporter) (nRequests int, err error)
 	Clone() Requester
 }
 
@@ -96,6 +101,20 @@ type Work struct {
 	report *report
 }
 
+type workReporter struct {
+	results chan<- *Result
+}
+
+var _ Reporter = (*workReporter)(nil)
+
+func (w *workReporter) Finish(r *Result) {
+	w.results <- r
+}
+
+func (w *workReporter) Start() {
+	// TODO
+}
+
 func (b *Work) writer() io.Writer {
 	if b.Writer == nil {
 		return os.Stdout
@@ -140,16 +159,21 @@ func (b *Work) Finish() {
 	b.report.finalize(total)
 }
 
-func (b *Work) makeRequest(c *http.Client) {
+func (b *Work) makeRequests(c *http.Client, r *workReporter) int {
 	ctx := context.Background()
 
-	_, err := b.Requester.Clone().Do(ctx, c, b.results)
+	n, err := b.Requester.Clone().Do(ctx, c, r)
 	if err != nil {
 		log.Printf("requester.Do: %s", err)
 	}
+
+	return n
 }
 
-func (b *Work) runWorker(client *http.Client, n int) {
+func (b *Work) runWorker(client *http.Client, n int) int {
+	count := 0
+	reporter := &workReporter{b.results}
+
 	// if n == 0, run forever
 	i := -1
 	if n > 0 {
@@ -159,14 +183,16 @@ func (b *Work) runWorker(client *http.Client, n int) {
 		// Check if application is stopped. Do not send into a closed channel.
 		select {
 		case <-b.stopCh:
-			return
+			return count
 		default:
-			b.makeRequest(client)
+			count += b.makeRequests(client, reporter)
 		}
 		if n > 0 {
 			i++
 		}
 	}
+
+	return count
 }
 
 func (b *Work) runN(client *http.Client) {
@@ -183,16 +209,16 @@ func (b *Work) runN(client *http.Client) {
 	wg.Wait()
 }
 
-func (b *Work) timeOne(client *http.Client) time.Duration {
+func (b *Work) timeOne(client *http.Client) (int, time.Duration) {
 	start := now()
-	b.runWorker(client, 1)
-	return now() - start
+	n := b.runWorker(client, 1)
+	return n, now() - start
 }
 
 func (b *Work) runRPS(client *http.Client) {
-	delta := b.timeOne(client)
+	n, delta := b.timeOne(client)
 
-	fmt.Printf("n requests took %s\n", delta.String())
+	fmt.Printf("%d requests took %s\n", n, delta.String())
 }
 
 func (b *Work) runWorkers() {

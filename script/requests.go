@@ -218,62 +218,21 @@ func RequestsModule() *requestsModule {
 }
 
 func (r *requestsModule) fnRequestsGet(t *starlark.Thread, fn *starlark.Builtin, args starlark.Tuple, kwargs []starlark.Tuple) (starlark.Value, error) {
-	var c *http.Client
-	var ok bool
-	if c, ok = t.Local("requests_client").(*http.Client); !ok {
-		return starlark.None, fmt.Errorf("requests can't be used at top level, only in function bodies")
-	}
-	if c == nil {
-		return starlark.None, fmt.Errorf("expected non-nil requests_client")
-	}
-
-	var reporter chan<- *requester.Result
-	if reporter, ok = t.Local("reporter").(chan<- *requester.Result); !ok {
-		return starlark.None, fmt.Errorf("expected reporter")
-	}
-	if reporter == nil {
-		return starlark.None, fmt.Errorf("expected non-nil reporter")
-	}
-
-	var urlString starlark.Value
-	if err := starlark.UnpackArgs(fn.Name(), args, kwargs, "url", &urlString); err != nil {
-		return nil, err
-	}
-
-	var url starlark.String
-	if url, ok = urlString.(starlark.String); !ok {
-		return starlark.None, fmt.Errorf("expected url to be a string")
-	}
-
-	req, err := http.NewRequest("GET", url.GoString(), nil)
-	if err != nil {
-		return starlark.None, fmt.Errorf("http.NewRequest: %w", err)
-	}
-
-	goresp, err := instrument(c, req, reporter)
-	if err != nil {
-		return starlark.None, fmt.Errorf("r.c.Do: %w", err)
-	}
-
-	return newResponse(goresp)
+	return r.request("GET", t, fn, args, kwargs)
 }
 
 func (r *requestsModule) fnRequestsPost(t *starlark.Thread, fn *starlark.Builtin, args starlark.Tuple, kwargs []starlark.Tuple) (starlark.Value, error) {
-	var c *http.Client
+	return r.request("POST", t, fn, args, kwargs)
+}
+
+func (r *requestsModule) request(method string, t *starlark.Thread, fn *starlark.Builtin, args starlark.Tuple, kwargs []starlark.Tuple) (starlark.Value, error) {
+	var tls *scriptTls
 	var ok bool
-	if c, ok = t.Local("requests_client").(*http.Client); !ok {
+	if tls, ok = t.Local(scriptTlsKey).(*scriptTls); !ok {
 		return starlark.None, fmt.Errorf("requests can't be used at top level, only in function bodies")
 	}
-	if c == nil {
-		return starlark.None, fmt.Errorf("expected non-nil requests_client")
-	}
-
-	var reporter chan<- *requester.Result
-	if reporter, ok = t.Local("reporter").(chan<- *requester.Result); !ok {
-		return starlark.None, fmt.Errorf("expected reporter")
-	}
-	if reporter == nil {
-		return starlark.None, fmt.Errorf("expected non-nil reporter")
+	if tls == nil {
+		return starlark.None, fmt.Errorf("expected non-nil %s", scriptTlsKey)
 	}
 
 	var urlString, dataVal, headersVal starlark.Value
@@ -282,19 +241,21 @@ func (r *requestsModule) fnRequestsPost(t *starlark.Thread, fn *starlark.Builtin
 	}
 
 	var isUrlEncodedBody bool
-
 	var body io.Reader
-	if data, ok := dataVal.(starlark.String); ok {
-		body = bytes.NewReader([]byte(data))
-	} else if data, ok := dataVal.(*starlark.Dict); ok {
-		bodyStr, err := urlencodeBody(data)
-		if err != nil {
-			return nil, fmt.Errorf("urlencodeBody: %w", err)
+
+	if method == "POST" {
+		if data, ok := dataVal.(starlark.String); ok {
+			body = bytes.NewReader([]byte(data))
+		} else if data, ok := dataVal.(*starlark.Dict); ok {
+			bodyStr, err := urlencodeBody(data)
+			if err != nil {
+				return nil, fmt.Errorf("urlencodeBody: %w", err)
+			}
+			body = strings.NewReader(bodyStr)
+			isUrlEncodedBody = true
+		} else {
+			return starlark.None, fmt.Errorf("expected a string or dict for data")
 		}
-		body = strings.NewReader(bodyStr)
-		isUrlEncodedBody = true
-	} else {
-		return starlark.None, fmt.Errorf("expected a string or dict for data")
 	}
 
 	var url starlark.String
@@ -302,7 +263,7 @@ func (r *requestsModule) fnRequestsPost(t *starlark.Thread, fn *starlark.Builtin
 		return starlark.None, fmt.Errorf("expected url to be a string")
 	}
 
-	req, err := http.NewRequest("POST", url.GoString(), body)
+	req, err := http.NewRequestWithContext(tls.ctx, method, url.GoString(), body)
 	if err != nil {
 		return starlark.None, fmt.Errorf("http.NewRequest: %w", err)
 	}
@@ -335,12 +296,13 @@ func (r *requestsModule) fnRequestsPost(t *starlark.Thread, fn *starlark.Builtin
 		req.Header.Set("content-type", "application/x-www-form-urlencoded")
 	}
 
-	goresp, err := instrument(c, req, reporter)
+	tls.count++
+	resp, err := instrument(tls.client, req, tls.reporter)
 	if err != nil {
 		return starlark.None, fmt.Errorf("r.c.Do: %w", err)
 	}
 
-	return newResponse(goresp)
+	return newResponse(resp)
 }
 
 var startTime = time.Now()
@@ -348,7 +310,7 @@ var startTime = time.Now()
 // now returns time.Duration using stdlib time
 func now() time.Duration { return time.Since(startTime) }
 
-func instrument(c *http.Client, req *http.Request, reporter chan<- *requester.Result) (*http.Response, error) {
+func instrument(c *http.Client, req *http.Request, reporter requester.Reporter) (*http.Response, error) {
 	s := now()
 	var size int64
 	var code int
@@ -381,6 +343,7 @@ func instrument(c *http.Client, req *http.Request, reporter chan<- *requester.Re
 		},
 	}
 	req = req.WithContext(httptrace.WithClientTrace(req.Context(), trace))
+	reporter.Start()
 	resp, err := c.Do(req)
 	if err == nil {
 		size = resp.ContentLength
@@ -390,7 +353,7 @@ func instrument(c *http.Client, req *http.Request, reporter chan<- *requester.Re
 	t := now()
 	resDuration = t - resStart
 	finish := t - s
-	reporter <- &requester.Result{
+	reporter.Finish(&requester.Result{
 		Offset:        s,
 		StatusCode:    code,
 		Duration:      finish,
@@ -401,7 +364,7 @@ func instrument(c *http.Client, req *http.Request, reporter chan<- *requester.Re
 		ReqDuration:   reqDuration,
 		ResDuration:   resDuration,
 		DelayDuration: delayDuration,
-	}
+	})
 
 	return resp, err
 }

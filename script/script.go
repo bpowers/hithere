@@ -21,8 +21,17 @@ import (
 	"github.com/bpowers/hithere/script/starlarkjson"
 )
 
+const scriptTlsKey = "script_tls"
+
 type Script struct {
 	config Config
+}
+
+type scriptTls struct {
+	ctx      context.Context
+	client   *http.Client
+	reporter requester.Reporter
+	count    int
 }
 
 // predeclaredModules is a helper that returns new predeclared modules.
@@ -173,7 +182,7 @@ func New(filename string) (*Script, error) {
 	return s, nil
 }
 
-func (s *Script) Do(ctx context.Context, c *http.Client, reporter chan<- *requester.Result) (nRequests int, err error) {
+func (s *Script) Do(ctx context.Context, client *http.Client, reporter requester.Reporter) (nRequests int, err error) {
 	vars := &starlark.Dict{}
 
 	mainVal, ok := s.config.locals["main"]
@@ -185,12 +194,18 @@ func (s *Script) Do(ctx context.Context, c *http.Client, reporter chan<- *reques
 		return 0, fmt.Errorf("`main' must be a function (got a %s)", mainVal.Type())
 	}
 
+	tls := &scriptTls{
+		ctx: ctx,
+		client: client,
+		reporter: reporter,
+		count: 0,
+	}
+
 	thread := &starlark.Thread{
 		Print: print,
 	}
 	thread.SetLocal("context", ctx)
-	thread.SetLocal("requests_client", c)
-	thread.SetLocal("reporter", reporter)
+	thread.SetLocal(scriptTlsKey, tls)
 	mainCtx := &Module{
 		Name: "hithere_ctx",
 		Attrs: starlark.StringDict(map[string]starlark.Value{
@@ -203,7 +218,7 @@ func (s *Script) Do(ctx context.Context, c *http.Client, reporter chan<- *reques
 		return 0, err
 	}
 
-	return 1, nil
+	return tls.count, nil
 }
 
 func (s *Script) Clone() requester.Requester {
