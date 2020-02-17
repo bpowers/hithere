@@ -30,6 +30,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/paulbellamy/ratecounter"
 	"golang.org/x/net/http2"
 )
 
@@ -107,9 +108,12 @@ type Work struct {
 	report *report
 
 	workerCount int32
+
+	counter *ratecounter.RateCounter
 }
 
 type workReporter struct {
+	counter   *ratecounter.RateCounter
 	results   chan<- *Result
 	count     uint32
 	userAgent string
@@ -123,6 +127,7 @@ func (w *workReporter) Finish(r *Result) {
 
 func (w *workReporter) Start() {
 	atomic.AddUint32(&w.count, 1)
+	w.counter.Incr(1)
 }
 
 func (w *workReporter) Count() int {
@@ -145,6 +150,7 @@ func (b *Work) Init() {
 	b.initOnce.Do(func() {
 		b.results = make(chan *Result, maxResult)
 		b.stopCh = make(chan struct{}, maxConcurrency)
+		b.counter = ratecounter.NewRateCounter(1 * time.Second)
 	})
 }
 
@@ -195,7 +201,7 @@ func (b *Work) decWorkerCount() {
 }
 
 func (b *Work) runWorker(client *http.Client, n int) int {
-	reporter := &workReporter{b.results, 0, b.UserAgent}
+	reporter := &workReporter{b.counter, b.results, 0, b.UserAgent}
 
 	// if n == 0, run forever
 	i := -1
@@ -233,7 +239,7 @@ func (b *Work) runN(client *http.Client) {
 }
 
 func (b *Work) timeOne(client *http.Client) (int, time.Duration) {
-	reporter := &workReporter{make(chan *Result, maxResult), 0, b.UserAgent}
+	reporter := &workReporter{ratecounter.NewRateCounter(1 * time.Second), make(chan *Result, maxResult), 0, b.UserAgent}
 	defer func() {
 		close(reporter.results)
 	}()
@@ -274,8 +280,22 @@ func (b *Work) runRPS(client *http.Client) {
 			wg.Done()
 		}()
 	}
+	go b.consoleReport()
 	wg.Wait()
+}
 
+func (b *Work) consoleReport() {
+	ticker := time.NewTicker(1 * time.Second)
+	defer func() {
+		ticker.Stop()
+	}()
+
+	for {
+		select {
+		case <-ticker.C:
+			fmt.Printf("current: %d rps\n", b.counter.Rate())
+		}
+	}
 }
 
 func (b *Work) runWorkers() {
