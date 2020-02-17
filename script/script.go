@@ -195,10 +195,10 @@ func (s *Script) Do(ctx context.Context, client *http.Client, reporter requester
 	}
 
 	tls := &scriptTls{
-		ctx: ctx,
-		client: client,
+		ctx:      ctx,
+		client:   client,
 		reporter: reporter,
-		count: 0,
+		count:    0,
 	}
 
 	thread := &starlark.Thread{

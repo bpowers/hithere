@@ -40,6 +40,7 @@ const (
 type Reporter interface {
 	Start()
 	Finish(r *Result)
+	UserAgent() string
 }
 
 type Requester interface {
@@ -76,6 +77,8 @@ type Work struct {
 	// Timeout in seconds.
 	Timeout int
 
+	UserAgent string
+
 	// DisableCompression is an option to disable compression in response
 	DisableCompression bool
 
@@ -102,7 +105,8 @@ type Work struct {
 }
 
 type workReporter struct {
-	results chan<- *Result
+	results   chan<- *Result
+	userAgent string
 }
 
 var _ Reporter = (*workReporter)(nil)
@@ -113,6 +117,10 @@ func (w *workReporter) Finish(r *Result) {
 
 func (w *workReporter) Start() {
 	// TODO
+}
+
+func (w *workReporter) UserAgent() string {
+	return w.userAgent
 }
 
 func (b *Work) writer() io.Writer {
@@ -172,7 +180,7 @@ func (b *Work) makeRequests(c *http.Client, r *workReporter) int {
 
 func (b *Work) runWorker(client *http.Client, n int) int {
 	count := 0
-	reporter := &workReporter{b.results}
+	reporter := &workReporter{b.results, b.UserAgent}
 
 	// if n == 0, run forever
 	i := -1

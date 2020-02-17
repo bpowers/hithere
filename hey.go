@@ -50,6 +50,8 @@ var (
 	h2   = flag.Bool("h2", false, "")
 	cpus = flag.Int("cpus", runtime.GOMAXPROCS(-1), "")
 
+	userAgent = flag.String("user-agent", heyUA, "")
+
 	disableCompression = flag.Bool("disable-compression", false, "")
 	disableKeepAlives  = flag.Bool("disable-keepalive", false, "")
 	proxyAddr          = flag.String("x", "", "")
@@ -80,6 +82,8 @@ Options:
   -disable-redirects    Disable following of HTTP redirects
   -cpus                 Number of used cpu cores.
                         (default for current machine is %d cores)
+
+  -user-agent HTTP user agent (default is hithere/0.0.1)
 `
 
 func main() {
@@ -130,6 +134,7 @@ func main() {
 		N:                  num,
 		RPS:                *rps,
 		Timeout:            *t,
+		UserAgent:          *userAgent,
 		DisableCompression: *disableCompression,
 		DisableKeepAlives:  *disableKeepAlives,
 		H2:                 *h2,

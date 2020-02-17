@@ -296,6 +296,8 @@ func (r *requestsModule) request(method string, t *starlark.Thread, fn *starlark
 		req.Header.Set("content-type", "application/x-www-form-urlencoded")
 	}
 
+	req.Header.Set("user-agent", tls.reporter.UserAgent())
+
 	tls.count++
 	resp, err := instrument(tls.client, req, tls.reporter)
 	if err != nil {
