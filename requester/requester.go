@@ -307,7 +307,7 @@ func (b *Work) runRPS(client *http.Client) {
 	fmt.Printf("%d workers for %f RPS (%d / %f sec)\n", nWorkers, rpsTarget, n, origDelta.Seconds())
 
 	var wg sync.WaitGroup
-	for i := 0; i < 2; i++ {
+	for i := 0; i < nWorkers; i++ {
 		b.runRPSWorker(origDeltaMs, &wg, client)
 	}
 
@@ -364,15 +364,15 @@ func (b *Work) consoleReport(origDeltaMs float64, wg *sync.WaitGroup, client *ht
 
 			// avoid flip flopping around by ignoring 1 worker diffs
 			if workerDiff > 1 {
-				fmt.Printf("spawning %d new workers\n", workerDiff)
-				for i := 0; i < workerDiff; i++ {
-					b.runRPSWorker(origDeltaMs, wg, client)
-				}
+				//fmt.Printf("spawning %d new workers\n", workerDiff)
+				//for i := 0; i < workerDiff; i++ {
+				//	b.runRPSWorker(origDeltaMs, wg, client)
+				//}
 			} else if workerDiff < -1 {
-				fmt.Printf("killing %d workers\n", -workerDiff)
-				for i := 0; i < -workerDiff; i++ {
-					b.workerStopCh <- struct{}{}
-				}
+				//fmt.Printf("killing %d workers\n", -workerDiff)
+				//for i := 0; i < -workerDiff; i++ {
+				//	b.workerStopCh <- struct{}{}
+				//}
 			}
 		}
 	}
